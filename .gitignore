@@ -1,0 +1,14 @@
+.venv/
+.DS_Store
+build/
+dist/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+data/
+output/signal.csv
+output/research_weights.csv
+output/*diagnostics.json
+output/backtest.csv
+output/creation_forecast_evaluation.csv

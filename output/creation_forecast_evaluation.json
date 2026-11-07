@@ -1,0 +1,15 @@
+{
+  "observation_count": 7622,
+  "benchmark": "predict no net primary creations/redemptions",
+  "method": "trailing five-span EWMA of historical share creation rates",
+  "limitation": "The realized NAV is used to value realized share changes, but forecasts use only prior NAV and shares.",
+  "sample": "Fund days with one-step changes and at least 20 past observations; no prices or stock returns involved.",
+  "mae_model_usd": 15444129.678583689,
+  "mae_zero_baseline_usd": 12403359.077295108,
+  "mae_improvement_vs_zero_pct": -24.51570241850729,
+  "nonzero_direction_hit_rate_pct": 62.74987810823988,
+  "funds": [
+    "NOBL",
+    "UPRO"
+  ]
+}

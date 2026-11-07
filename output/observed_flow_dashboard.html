@@ -1,0 +1,54 @@
+<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>ETF Flow Illusion | Flow Pressure Lab</title><style>
+:root{color-scheme:dark;--bg:#0a111a;--panel:#121e2b;--line:#25384a;--soft:#889cac;--white:#eef4f8;--up:#58d2ad;--down:#ff9279;--gold:#e9ca78}
+*{box-sizing:border-box}body{font:14px/1.52 ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--white);margin:0}
+main{max-width:1270px;margin:0 auto;padding:48px 25px 80px}.eyebrow{font-size:11px;letter-spacing:2.7px;color:var(--up);font-weight:700;text-transform:uppercase}
+h1{font-size:clamp(31px,5vw,62px);line-height:1.07;letter-spacing:-2px;margin:12px 0 18px;font-weight:750}h2{font-size:21px;letter-spacing:-.5px;margin:0}
+.lead{max-width:930px;color:#a8bac9;font-size:17px;line-height:1.65}.muted{color:var(--soft)}a{color:#7ccef9}strong{font-weight:650}
+.badges{display:flex;flex-wrap:wrap;gap:10px;margin:24px 0 32px}.pill{border:1px solid var(--line);padding:7px 12px;border-radius:999px;font-size:12px;letter-spacing:.2px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0 36px}.metric{border:1px solid var(--line);background:var(--panel);padding:22px;border-radius:13px}
+.metric .val{font-size:28px;font-weight:700;letter-spacing:-.7px;margin:10px 0 6px}.metric small{color:var(--soft)}
+section{margin-top:30px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--panel)}.sec-head{padding:23px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.sec-body{padding:25px}.controls{display:flex;gap:8px;flex-wrap:wrap}button{cursor:pointer;border:1px solid #31495a;background:#162638;color:#c4d5e2;border-radius:8px;padding:8px 13px;font-weight:600}
+button.active{border-color:var(--up);background:#17372f;color:var(--up)}.table-scroller{overflow:auto}table{width:100%;border-collapse:collapse;min-width:750px}
+th{font-size:11px;text-align:right;color:#8096a8;padding:15px 18px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}td{padding:14px 18px;text-align:right;border-bottom:1px solid #20303d;font-variant-numeric:tabular-nums}tr:last-child td{border:0}
+.symbol{font-weight:800;font-size:16px;letter-spacing:.3px}.name{display:block;font-size:12px;color:var(--soft);font-weight:400}.up{color:var(--up)}.down{color:var(--down)}
+.barwrap{display:flex;align-items:center;gap:12px;justify-content:flex-end}.bartrack{width:110px;height:7px;background:#293745;border-radius:9px;overflow:hidden}.barfill{height:100%;border-radius:9px}
+.note{padding:17px 22px;background:#152938;border-left:3px solid var(--gold);margin:20px 0;color:#d3e2ec;line-height:1.65}.explain{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.explain div{padding:15px;background:#172635;border-radius:8px}
+footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--soft)}
+@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.explain{grid-template-columns:1fr}}@media(max-width:490px){main{padding:29px 14px}.grid{grid-template-columns:1fr 1fr}.metric{padding:14px}.metric .val{font-size:22px}.sec-body{padding:15px}}
+</style></head><body><main>
+    <div class='eyebrow'>FLOW PRESSURE LAB / MARKET STRUCTURE RESEARCH / 01</div>
+    <h1>The ETF flow illusion.</h1>
+    <p class='lead'>A fund can report more shares of a stock while its managers are effectively <strong>reducing that stock relative to fund growth</strong>. This page visualizes verified issuer-derived figures, not predicted flows or trades.</p>
+    <div class='badges'><span class='pill'>OBSERVED: 2026-11-03 CLOSE</span><span class='pill'>PROVIDER: TICKERINSIDE</span><span class='pill'>NO ADV / NO MODEL ALPHA</span></div>
+    <div class='grid'>
+      <div class='metric'><small>Stocks in this selected snapshot</small><div class='val'>13</div><small>Not the complete U.S. market</small></div>
+      <div class='metric'><small>Sign flips after growth adjustment</small><div class='val'>5</div><small>Accumulation ≠ allocation</small></div>
+      <div class='metric'><small>Megacaps with negative residual</small><div class='val'>7/7</div><small>Within displayed mega-cap names</small></div>
+      <div class='metric'><small>Issuer coverage in source</small><div class='val'>460 funds</div><small>~$5.28T of reported net assets</small></div>
+    </div>
+    <section><div class='sec-head'><div><h2>What the ETFs actually reported</h2><span class='muted'>Click sorting modes; totals are over selected securities only</span></div>
+      <div class='controls'><button id='sort_residual' class='active'>Growth-adjusted</button><button id='sort_raw'>Raw change</button><button id='sort_diverge'>Largest gap</button></div></div>
+      <div class='table-scroller'><table><thead><tr><th>Security</th><th>Raw ETF holding change</th><th>Beyond fund growth</th><th>Residual direction</th></tr></thead><tbody id='flow-body'></tbody></table></div>
+      <div class='sec-body'><div class='note'><strong>Read this correctly:</strong> growth-adjusted residual does not equal an ETF investor redemption. It may reflect constituent reweighting, index events, corporate actions or the provider's estimation methodology. Neither column establishes the next day's price direction.</div></div>
+    </section>
+    <section><div class='sec-head'><h2>Signal construction and what remains missing</h2></div><div class='sec-body'><div class='explain'>
+      <div><div class='eyebrow'>01 / Observe</div><h2>Δ ETF share count × NAV</h2><p class='muted'>Primary creations/redemptions are observable where the issuer publishes daily shares outstanding.</p></div>
+      <div><div class='eyebrow'>02 / Forecast</div><h2>Expected fund demand</h2><p class='muted'>The included code forecasts future creations from historical flows, not from this one-day table.</p></div>
+      <div><div class='eyebrow'>03 / Transmit</div><h2>$/20-day dollar ADV</h2><p class='muted'>A stock pressure score requires independently sourced, dated stock prices and volume.</p></div>
+    </div></div></section>
+    <footer><p>Attribution: <a href='https://tickerinside.com/api/v1/flows.json'>TickerInside ETF flows, November 3, 2026</a> (<a href='https://tickerinside.com/legal/#history'>history terms</a>). The small hand-selected extract here is for analysis, not a republished archive. Provider says its data cover iShares, SPDR and Global X funds. Issuer data can arrive late and change. Source figures are not independently audited. Built for research, not investment recommendations.</p></footer>
+    </main><script>const rows=[{"date": "2026-11-03", "ticker": "AAPL", "name": "Apple Inc.", "net_value_usd": 133686269, "net_value_beyond_growth_usd": -33544961}, {"date": "2026-11-03", "ticker": "MSFT", "name": "Microsoft", "net_value_usd": 99957627, "net_value_beyond_growth_usd": -25721669}, {"date": "2026-11-03", "ticker": "NVDA", "name": "Nvidia", "net_value_usd": 93450943, "net_value_beyond_growth_usd": -34773390}, {"date": "2026-11-03", "ticker": "AMZN", "name": "Amazon", "net_value_usd": 29014978, "net_value_beyond_growth_usd": -17653783}, {"date": "2026-11-03", "ticker": "AVGO", "name": "Broadcom", "net_value_usd": 9979722, "net_value_beyond_growth_usd": -13182150}, {"date": "2026-11-03", "ticker": "GOOGL", "name": "Alphabet Class A", "net_value_usd": -13250530, "net_value_beyond_growth_usd": -11790341}, {"date": "2026-11-03", "ticker": "META", "name": "Meta Platforms", "net_value_usd": -60070069, "net_value_beyond_growth_usd": -10718368}, {"date": "2026-11-03", "ticker": "LOAR", "name": "Loar Holdings", "net_value_usd": 204455656, "net_value_beyond_growth_usd": 204824512}, {"date": "2026-11-03", "ticker": "OKTA", "name": "Okta", "net_value_usd": -330914728, "net_value_beyond_growth_usd": -339885405}, {"date": "2026-11-03", "ticker": "GKOS", "name": "Glaukos", "net_value_usd": -487771647, "net_value_beyond_growth_usd": -493838010}, {"date": "2026-11-03", "ticker": "PANW", "name": "Palo Alto Networks", "net_value_usd": 21271514, "net_value_beyond_growth_usd": 12464765}, {"date": "2026-11-03", "ticker": "ETSY", "name": "Etsy", "net_value_usd": 5617574, "net_value_beyond_growth_usd": 1376484}, {"date": "2026-11-03", "ticker": "JXN", "name": "Jackson Financial", "net_value_usd": 7039253, "net_value_beyond_growth_usd": 3113771}];
+    let mode='residual';const body=document.getElementById('flow-body');
+    const money=n=>n===null||n===undefined?'—':(n<0?'−':n>0?'+':'')+'$'+(Math.abs(n)/1e6).toFixed(1)+'M';
+    const text=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const style=n=>n<0?'down':'up';
+    const key=r=>mode==='raw'?Math.abs(r.net_value_usd):mode==='diverge'?Math.abs(r.net_value_usd-r.net_value_beyond_growth_usd):Math.abs(r.net_value_beyond_growth_usd);
+    function draw(){let sorted=rows.slice().sort((a,b)=>key(b)-key(a));const mx=Math.max(...rows.map(r=>Math.abs(r.net_value_beyond_growth_usd||0)),1);
+      body.innerHTML=sorted.map(r=>{let f=r.net_value_beyond_growth_usd,raw=r.net_value_usd;
+        let width=Math.min(100,Math.abs(f||0)/mx*100),cls=style(f||0);
+        return `<tr><td><span class="symbol">${text(r.ticker)}</span><span class="name">${text(r.name)}</span></td><td class="${style(raw||0)}">${money(raw)}</td><td class="${cls}">${money(f)}</td><td><span class="barwrap"><span class="${cls}">${f>=0?'Addition':'Reduction'}</span><span class="bartrack"><span class="barfill" style="display:block;width:${width}%;background:var(--${f<0?'down':'up'})"></span></span></span></td></tr>`}).join('');
+      ['residual','raw','diverge'].forEach(m=>document.getElementById('sort_'+m).classList.toggle('active',m===mode));}
+    ['residual','raw','diverge'].forEach(m=>document.getElementById('sort_'+m).addEventListener('click',()=>{mode=m;draw()}));draw();
+    </script></body></html>
