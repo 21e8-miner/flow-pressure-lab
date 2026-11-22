@@ -8,6 +8,33 @@ import pandas as pd
 from .core import Config, observed_fund_flows
 
 
+def _summarize_slice(df: pd.DataFrame) -> dict:
+    mae_model = float(df.absolute_error_usd.mean())
+    mae_zero = float(df.zero_forecast_absolute_error_usd.mean())
+    rmse_model = float(np.sqrt(np.mean(np.square(df.error_usd.to_numpy(dtype=float)))))
+    rmse_zero = float(np.sqrt(np.mean(np.square(df.actual_usd.to_numpy(dtype=float)))))
+    nz = df[df.actual_usd.ne(0)]
+    corr = None
+    if len(df) >= 3 and df.forecast_usd.std(ddof=1) > 0 and df.actual_usd.std(ddof=1) > 0:
+        corr = float(np.corrcoef(df.forecast_usd.to_numpy(dtype=float),
+                                 df.actual_usd.to_numpy(dtype=float))[0, 1])
+    return {
+        "observation_count": int(len(df)),
+        "nonzero_outcome_count": int(len(nz)),
+        "nonzero_outcome_rate_pct": float(100.0 * len(nz) / len(df)) if len(df) else None,
+        "mae_model_usd": mae_model,
+        "mae_zero_baseline_usd": mae_zero,
+        "mae_improvement_vs_zero_pct": float(100 * (1 - mae_model / mae_zero)) if mae_zero > 0 else None,
+        "rmse_model_usd": rmse_model,
+        "rmse_zero_baseline_usd": rmse_zero,
+        "rmse_improvement_vs_zero_pct": float(100 * (1 - rmse_model / rmse_zero)) if rmse_zero > 0 else None,
+        "pearson_correlation": corr,
+        "nonzero_direction_hit_rate_pct": float(100 * nz["direction_correct"].mean()) if len(nz) else None,
+        "date_start": str(df.evaluation_close.min()),
+        "date_end": str(df.evaluation_close.max()),
+    }
+
+
 def evaluate_creation_forecast(fund_days: pd.DataFrame,
                                cfg: Config = Config(),
                                min_history: int = 20) -> tuple[pd.DataFrame, dict]:
@@ -43,14 +70,12 @@ def evaluate_creation_forecast(fund_days: pd.DataFrame,
               "limitation": "The realized NAV is used to value realized share changes, but forecasts use only prior NAV and shares.",
               "sample": "Fund days with one-step changes and at least 20 past observations; no prices or stock returns involved."}
     if not out.empty:
-        report.update({"mae_model_usd": float(out.absolute_error_usd.mean()),
-                       "mae_zero_baseline_usd": float(out.zero_forecast_absolute_error_usd.mean()),
-                       "mae_improvement_vs_zero_pct": float(100 * (1 - out.absolute_error_usd.mean() /
-                                                                   out.zero_forecast_absolute_error_usd.mean()))
-                       if out.zero_forecast_absolute_error_usd.mean() > 0 else None,
-                       "nonzero_direction_hit_rate_pct": float(100 * out.loc[out.actual_usd.ne(0), "direction_correct"].mean())
-                       if out.actual_usd.ne(0).any() else None,
-                       "funds": sorted(out.fund.unique().tolist())})
+        report.update(_summarize_slice(out))
+        report["funds"] = sorted(out.fund.unique().tolist())
+        report["per_fund"] = {
+            fund: _summarize_slice(part)
+            for fund, part in out.groupby("fund", sort=True)
+        }
     return out, report
 
 

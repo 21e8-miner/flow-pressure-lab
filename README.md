@@ -8,20 +8,37 @@ A reproducible, **research-only** prototype of the investment idea Michael Green
 |---|---|---|
 | Independent analysis of Tier1's published framework | Complete | `docs/RESEARCH.md`, original interview, T1A site |
 | Real, dated, selected ETF flow observations | Included | Thirteen securities from TickerInside's Nov. 3, 2026 issuer-derived disclosure; source credited |
-| Interactive HTML diagnostic | Working | `output/observed_flow_dashboard.html` |
-| Official ProShares NAV/share-count and holdings adapter | Implemented | Schema unit-tested; **not live fetched in this execution environment** |
-| Official iShares IVV holdings snapshot adapter | Implemented | Schema unit-tested; **not live fetched in this execution environment** |
-| Twelve Data daily price/volume adapter | Implemented | Requires user's existing API key; **not live fetched here** |
-| ETF share-creation baseline forecast | Implemented | Unit-tested on explicitly synthetic fixtures; empirical accuracy **not measured** |
-| Stock-level creation-equivalent pressure | Implemented | Requires real issuer data plus 20 trading sessions of prices/volume |
-| Fully invested, sector-neutral small tilts | Implemented | Constraints unit-tested; **not an investment recommendation** |
-| Annualized ex-ante tracking-error calculation | Implemented | Needs 60 aligned stock return observations; no number claimed when missing |
-| Forward-return, cost-aware backtester | Implemented | Point-in-time lag and next-close execution tested; **no genuine historical performance computed here** |
-| Forecast versus zero-baseline evaluator | Implemented | Use actual ProShares history locally to test if predictability exists |
-| Momentum/flow incremental-signal test | Implemented | Needs ≥25 valid cross sections and ≥20 names per day; no p-value invented |
+| Interactive HTML diagnostics | Working | `output/observed_flow_dashboard.html` and `output/empirical_flow_dashboard.html` |
+| Official ProShares NAV/share-count and holdings adapter | Live-verified | Verified Nov. 20, 2026 against 6 funds (`NOBL`, `UPRO`, `SSO`, `REGL`, `QLD`, `TQQQ`); fixed slash share-class normalization (`BRK/B` → `BRK-B`, `BF/B` → `BF-B`) |
+| Official iShares IVV holdings snapshot adapter | Live-verified | Verified Nov. 20, 2026 (`asof = 2026-11-19`, 503 equity rows, 1.159B shares, `$719.74` NAV proxy) |
+| Yahoo Finance v8 daily price/volume fallback adapter | Live-verified | Zero API key, stdlib `urllib`/`json`; fetched 68/68 NOBL tickers (9,656 bars) in ~2s |
+| Twelve Data daily price/volume adapter | Implemented | Supported automatically when `TWELVEDATA_API_KEY` is set; header-only auth unit-tested |
+| ETF share-creation baseline forecast | Empirically tested | **Fails kill criterion** across 25,034 real ProShares fund-days (2006–2026): MAE −18.6% worse, RMSE −6.0% worse than zero baseline |
+| Stock-level creation-equivalent pressure | Live-verified | Full 68/68 NOBL constituent coverage (`asof = 2026-11-21`) with real IVV sectors & Yahoo 20d ADV |
+| Fully invested, sector-neutral small tilts | Live-verified | Constraints verified on 68-stock universe (active share 2.43%, max tilt 35 bps, sector-neutral) |
+| Annualized ex-ante tracking-error calculation | Live-verified | Measured **0.27%** annualized from 60 aligned Yahoo Finance daily closes (budget ≤ 1.00%) |
+| Forward-return, cost-aware backtester | Empirically tested | 67-session constant-holdings pilot (`2026-08-17`→`2026-11-18`, 5 bps): **−5.4 bps** net excess, IR **−0.65** (gross +6.1 bps erased by turnover) |
+| Forecast versus zero-baseline evaluator | Empirically tested | Reports MAE, RMSE, Pearson correlation, nonzero hit rate, and per-fund breakdown in `output/creation_forecast_evaluation.json` |
+| Momentum/flow incremental-signal test | Empirically tested | 67 cross sections × 68 names (constant-holdings pilot): +3.37 bps/day per 1 SD, **HAC-5 t = +1.66** (not statistically significant at 5%) |
 | Leveraged ETF reset scenario | Implemented | Formula unit-tested; **model exposure, not documented trades** |
 
-**Environment limitation:** outgoing internet requests from the artifact-building container failed. The sample HTML uses the publicly accessible November 3 figures explicitly recorded from a source inspected in this research; no claim is made to have downloaded and validated current raw issuer CSVs here. The vendor adapters must be run on a host with internet and verified against the current official files.
+## Live Empirical Findings (Verified Nov. 20–21, 2026)
+
+Running the full pipeline on live-fetched ProShares official CSVs (`NOBL`, `UPRO`, `SSO`, `REGL`, `QLD`, `TQQQ`), iShares `IVV` sectors, and Yahoo Finance v8 daily closes/volumes produces a **clear falsification of the naive 5-day EWMA baseline**:
+
+1. **Creation-flow forecast fails the kill criterion (strictly PIT, 25,034 ProShares fund-days, 2006-07-18 to 2026-11-20):**
+   - Overall 5-day EWMA MAE is **\$25.76M** vs. **\$21.72M** for a zero-creation forecast (**−18.6% worse**); RMSE is **\$71.08M** vs. **\$67.06M** (**−6.0% worse**); Pearson correlation is **+0.142**; nonzero directional hit rate is **60.8%**.
+   - Every individual fund fails MAE and RMSE against zero (`NOBL` −23.7% MAE / r = −0.301, `REGL` −37.6% MAE / r = −0.410, `QLD` −32.6%, `SSO` −30.6%, `UPRO` −24.9%, `TQQQ` −7.9%).
+   - **Why:** 47.1% of fund-days have *zero* net share creations, and equity ETFs like `NOBL` and `REGL` exhibit quarter-end **ETF heartbeat trades** (e.g., `NOBL` `2020-07-31: +$998.2M` → `2020-08-04: −$1,002.9M`; `REGL` `2025-01-30: +$249.8M` → `2025-01-31: −$253.7M`). Naive EWMA extrapolates the creation spike directly into the next-day redemption reversal.
+2. **Stock-level signal & portfolio (`asof = 2026-11-21`, 68/68 NOBL constituents, strictly PIT):**
+   - Full benchmark coverage (100.0% weight) after fixing ProShares `/` share-class tickers (`BF/B` → `BF-B`, `BRK/B` → `BRK-B`).
+   - Sector-neutral, long-only portfolio achieves **0.27%** measured annualized ex-ante tracking error (60 aligned sessions) with 2.43% active share.
+3. **Walk-forward backtest & Fama–MacBeth test (67 sessions, `2026-08-17` to `2026-11-18`, constant-holdings pilot):**
+   - *Point-in-time caveat:* Free issuer endpoints publish only the latest holdings snapshot, so constituent weights are held constant at `2026-11-20` while fund flows and stock prices/volumes are strictly point-in-time.
+   - At an assumed 5 bps one-way cost, gross excess (+6.1 bps) is erased by 1.69% average daily one-way turnover, leaving **−5.4 bps cumulative net excess** (annualized **IR = −0.65**).
+   - Cross-sectional Fama–MacBeth regression (controlling for 20-day momentum, log ADV20, and sector fixed effects) yields **+3.37 bps/day per 1 SD** with **HAC-5 t = +1.66** (raw: +2.76 bps/day, t = +1.28) — **not statistically significant** at the 5% level.
+
+Open `output/empirical_flow_dashboard.html` (regenerated via `flowlab empirical-report`) for the full interactive breakdown.
 
 ## Immediate use, no API key
 
@@ -72,14 +89,18 @@ flowlab benchmark-from-holdings IVV --data-dir data
 
 `--estimate-nav` is **explicit opt-in**. It uses `sum(issuer-reported holdings market values) / issuer-reported fund shares outstanding` as an *approximate* NAV per share; it is not a published official NAV. Verify/replace this estimate with direct daily NAV from your licensed vendor for production research. Collect fresh IVV snapshots on separate trading days; one file is insufficient to calculate share creations, and at least six prior valid creation observations are needed for the forecast. iShares publishes latest holdings and shares outstanding, but the single CSV is not a historical fund-flow series.
 
-Fetch dated equity prices and volumes with an **actual** Twelve Data key on the user's host:
+Fetch dated equity prices and volumes (automatically uses Twelve Data when `TWELVEDATA_API_KEY` is set, or falls back to the zero-API-key Yahoo Finance v8 chart endpoint):
 
 ```bash
+# Zero API key (Yahoo Finance v8 fallback):
+flowlab prices --symbols AAPL,MSFT,NVDA,AMZN,AVGO --start 2026-08-01 --end 2026-11-20 --provider yahoo --data-dir data
+
+# Or with an actual Twelve Data key:
 export TWELVEDATA_API_KEY='your-own-key'
-flowlab prices --symbols AAPL,MSFT,NVDA,AMZN,AVGO --start 2026-08-01 --end 2026-11-06 --data-dir data
+flowlab prices --symbols AAPL,MSFT,NVDA,AMZN,AVGO --start 2026-08-01 --end 2026-11-20 --provider twelvedata --data-dir data
 ```
 
-The CLI limits each request batch to 50 names. Complete the *entire* benchmark universe, not just mega-caps, before expecting research portfolio weights. Twelve Data has quotas and plan-specific history access; test them locally. Its daily prices are **split-adjusted but not total-return/dividend-adjusted**; raw price-only backtests will omit dividends. Obtain a proper total-return series before fiduciary performance comparisons.
+The Twelve Data adapter limits each request batch to 50 names; both Twelve Data and Yahoo Finance default `close` bars are **split-adjusted but not total-return/dividend-adjusted** (pass `--use-adjclose` with `--provider yahoo` to use Yahoo's dividend+split-adjusted close, and verify corporate actions independently before fiduciary performance comparisons). Complete the *entire* benchmark universe, not just mega-caps, before expecting research portfolio weights.
 
 For any named evaluation date (use a historical trade day, not a future date):
 
@@ -163,7 +184,7 @@ python -m pip install -e '.[test]'
 pytest -q
 ```
 
-The unit tests use **explicitly synthetic fixture inputs only to validate arithmetic, lag logic, split handling, long-only/sector neutrality, coverage failures and file parsers**. They make **zero claims about historical market behavior**. At preparation time, all 13 tests pass. Re-run tests after downloading vendor data; validate dates, daily fund totals and split histories independently.
+The unit tests use **explicitly synthetic/mocked fixture inputs only to validate arithmetic, lag logic, split handling, long-only/sector neutrality, coverage failures, file parsers, and HTML rendering**. They make **zero claims about historical market behavior**. All 25 tests pass offline. Re-run tests after downloading vendor data; validate dates, daily fund totals and split histories independently.
 
 All HTTP requests made by the local adapters set the User-Agent header to:
 

@@ -12,8 +12,8 @@ from .backtest import walk_forward
 from .core import Config, construct_portfolio, create_signal, load_inputs, read_table
 from .evaluate import evaluate_creation_forecast, leveraged_reset_estimate
 from .factor_eval import make_forward_panel, test_incremental_flow_premium
-from .report import observed_report, signal_report
-from .vendors import fetch_twelvedata_prices, import_ishares_ivv, import_proshares, inspect_stock_flow
+from .report import empirical_report, observed_report, signal_report
+from .vendors import fetch_prices, import_ishares_ivv, import_proshares, inspect_stock_flow
 
 
 def store_json(path: Path, obj: dict) -> None:
@@ -30,9 +30,11 @@ def main() -> None:
     p.add_argument("--estimate-nav", action="store_true", help="Explicitly use holdings market value / shares as a NAV proxy")
     p = sub.add_parser("inspect-stock", help="One user-requested TickerInside stock flow lookup; never archives")
     p.add_argument("ticker")
-    p = sub.add_parser("prices", help="Fetch dated genuine Twelve Data daily closes and volumes")
+    p = sub.add_parser("prices", help="Fetch dated daily closes and volumes (Twelve Data or Yahoo Finance v8 fallback)")
     p.add_argument("--symbols", required=True, help="comma-separated tickers")
     p.add_argument("--start", required=True); p.add_argument("--end", required=True)
+    p.add_argument("--provider", choices=["auto", "yahoo", "twelvedata"], default="auto")
+    p.add_argument("--use-adjclose", action="store_true", help="Use dividend+split-adjusted close when provider=yahoo")
     p.add_argument("--data-dir", default="data")
     p = sub.add_parser("benchmark-from-holdings", help="Create benchmark from issuer holdings")
     p.add_argument("fund"); p.add_argument("--data-dir", default="data")
@@ -55,6 +57,9 @@ def main() -> None:
     p = sub.add_parser("observed-report", help="Chart small attributed source snapshot, no scores")
     p.add_argument("--input", default="examples/observed_flows_2026-11-03.csv")
     p.add_argument("--output", default="output/observed_flow_dashboard.html")
+    p = sub.add_parser("empirical-report", help="Render empirical HTML dashboard from live evaluation artifacts")
+    p.add_argument("--output-dir", default="output")
+    p.add_argument("--output", default="output/empirical_flow_dashboard.html")
     args = parser.parse_args()
     if args.command == "capture-proshares":
         print(json.dumps(import_proshares(args.fund, Path(args.data_dir)), indent=2))
@@ -64,7 +69,8 @@ def main() -> None:
         print(json.dumps(inspect_stock_flow(args.ticker), indent=2))
     elif args.command == "prices":
         tickers = [t.strip().upper() for t in args.symbols.split(",") if t.strip()]
-        print(json.dumps(fetch_twelvedata_prices(tickers, Path(args.data_dir), args.start, args.end), indent=2))
+        print(json.dumps(fetch_prices(tickers, Path(args.data_dir), args.start, args.end,
+                                      provider=args.provider, use_adjclose=args.use_adjclose), indent=2))
     elif args.command == "benchmark-from-holdings":
         data = Path(args.data_dir)
         h = pd.read_csv(data / "holdings.csv")
@@ -122,6 +128,31 @@ def main() -> None:
     elif args.command == "observed-report":
         observed_report(pd.read_csv(args.input), Path(args.output))
         print(f"Report: {args.output}")
+    elif args.command == "empirical-report":
+        out = Path(args.output_dir)
+        eval_path = out / "creation_forecast_evaluation.json"
+        if not eval_path.exists():
+            raise FileNotFoundError(f"Run `flowlab evaluate-creations` first; missing {eval_path}")
+        creation_eval = json.loads(eval_path.read_text(encoding="utf-8"))
+        sig_df = pd.read_csv(out / "signal.csv") if (out / "signal.csv").exists() else None
+        sig_diag = json.loads((out / "signal_diagnostics.json").read_text(encoding="utf-8")) if (out / "signal_diagnostics.json").exists() else None
+        port_df = pd.read_csv(out / "research_weights.csv") if (out / "research_weights.csv").exists() else None
+        port_info = json.loads((out / "portfolio_diagnostics.json").read_text(encoding="utf-8")) if (out / "portfolio_diagnostics.json").exists() else None
+        bt_df = pd.read_csv(out / "backtest.csv") if (out / "backtest.csv").exists() else None
+        bt_sum = json.loads((out / "backtest_diagnostics.json").read_text(encoding="utf-8")) if (out / "backtest_diagnostics.json").exists() else None
+        inc = json.loads((out / "incremental_factor_test.json").read_text(encoding="utf-8")) if (out / "incremental_factor_test.json").exists() else None
+        empirical_report(
+            creation_eval=creation_eval,
+            path=Path(args.output),
+            signal=sig_df,
+            signal_diag=sig_diag,
+            portfolio=port_df,
+            portfolio_info=port_info,
+            backtest=bt_df,
+            backtest_summary=bt_sum,
+            incremental=inc,
+        )
+        print(f"Empirical report: {args.output}")
 
 
 if __name__ == "__main__":

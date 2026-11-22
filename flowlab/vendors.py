@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 import json
 import os
 from pathlib import Path
 import re
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -16,6 +17,7 @@ import pandas as pd
 USER_AGENT = "OpenAI File Downloader, XaiImageApiFetch/1.0"
 PROSHARES_ROOT = "https://accounts.profunds.com/etfdata/ByFund"
 ISHARES_IVV = "https://www.ishares.com/us/products/239726/ishares-core-s-p-500-etf/latest-holdings.csv"
+YAHOO_CHART_ROOT = "https://query1.finance.yahoo.com/v8/finance/chart"
 
 
 def fetch(url: str, headers: dict[str, str] | None = None) -> bytes:
@@ -42,12 +44,18 @@ def parse_proshares_nav(payload: bytes, fund: str) -> pd.DataFrame:
     needed = {"Date", "NAV", "Shares Outstanding (000)"}
     if not needed.issubset(d.columns):
         raise ValueError(f"{fund}: ProShares NAV format changed: {list(d.columns)}")
-    out = pd.DataFrame({"date": pd.to_datetime(d["Date"]).dt.strftime("%Y-%m-%d"),
-                        "fund": fund,
-                        "nav": pd.to_numeric(d["NAV"].astype(str).str.replace(",", "", regex=False)),
-                        "shares_outstanding": pd.to_numeric(
-                            d["Shares Outstanding (000)"].astype(str).str.replace(",", "", regex=False)) * 1000})
-    return out.dropna()
+    out = pd.DataFrame({
+        "date": pd.to_datetime(d["Date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+        "fund": fund,
+        "nav": pd.to_numeric(d["NAV"].astype(str).str.replace(r"[$,]", "", regex=True), errors="coerce"),
+        "shares_outstanding": pd.to_numeric(
+            d["Shares Outstanding (000)"].astype(str).str.replace(r"[$,]", "", regex=True),
+            errors="coerce",
+        ) * 1000,
+    })
+    out = out.dropna()
+    out = out[out["nav"].gt(0) & out["shares_outstanding"].gt(0)]
+    return out.drop_duplicates(["fund", "date"], keep="last").sort_values("date").reset_index(drop=True)
 
 
 def parse_proshares_holdings(payload: bytes, fund: str) -> pd.DataFrame:
@@ -67,7 +75,14 @@ def parse_proshares_holdings(payload: bytes, fund: str) -> pd.DataFrame:
     if not needed.issubset(d.columns):
         raise ValueError(f"ProShares holdings format changed: {list(d.columns)}")
     d["market_value"] = pd.to_numeric(d["Market Value"].astype(str).str.replace(r"[$,]", "", regex=True), errors="coerce")
-    d["ticker"] = d["Security Ticker"].astype(str).str.strip()
+    # ProShares encodes share-class tickers with '/' (e.g., BRK/B, BF/B); normalize to '-' to match iShares & Yahoo.
+    d["ticker"] = (
+        d["Security Ticker"]
+        .astype(str)
+        .str.strip()
+        .str.replace("/", "-", regex=False)
+        .str.replace(" ", "-", regex=False)
+    )
     d = d[d.ticker.str.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}") & d.market_value.gt(0)].copy()
     if len(d) < 2:
         raise ValueError("No equity holdings in file; reject derivative-only fund")
@@ -198,6 +213,141 @@ def fetch_twelvedata_prices(tickers: list[str], out_dir: Path,
             "start": start, "end": end,
             "source": "Twelve Data daily time_series: split-adjusted closes, dividend-unadjusted; verify volume treatment",
             "url": "https://api.twelvedata.com/time_series"}
+
+
+def parse_yahoo_chart(payload: bytes, ticker: str,
+                      start: str | None = None, end: str | None = None,
+                      use_adjclose: bool = False) -> pd.DataFrame:
+    """Parse Yahoo Finance v8 chart JSON into normalized daily OHLCV rows."""
+    data = json.loads(payload)
+    chart = data.get("chart") or {}
+    if chart.get("error"):
+        raise RuntimeError(f"Yahoo Finance rejected {ticker}: {chart['error']}")
+    results = chart.get("result") or []
+    if not results:
+        raise RuntimeError(f"Yahoo Finance returned empty result for {ticker}")
+    res = results[0]
+    timestamps = res.get("timestamp") or []
+    indicators = res.get("indicators") or {}
+    quotes = (indicators.get("quote") or [{}])[0]
+    closes = quotes.get("close") or []
+    volumes = quotes.get("volume") or []
+    if use_adjclose:
+        adj = (indicators.get("adjclose") or [{}])[0].get("adjclose")
+        if adj and len(adj) == len(timestamps):
+            closes = adj
+    records = []
+    for ts, close, volume in zip(timestamps, closes, volumes):
+        if ts is None or close is None or volume is None:
+            continue
+        close_f, vol_f = float(close), float(volume)
+        if close_f <= 0 or vol_f <= 0:
+            continue
+        day = datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
+        if start and day < start:
+            continue
+        if end and day > end:
+            continue
+        records.append({"date": day, "ticker": ticker.upper(), "close": close_f, "volume": vol_f})
+    if not records:
+        return pd.DataFrame(columns=["date", "ticker", "close", "volume"])
+    df = pd.DataFrame(records)
+    return df.drop_duplicates(["ticker", "date"], keep="last").sort_values("date").reset_index(drop=True)
+
+
+def fetch_yahoo_prices(tickers: list[str], out_dir: Path,
+                       start: str, end: str,
+                       use_adjclose: bool = False,
+                       max_workers: int = 6,
+                       skip_errors: bool = False) -> dict:
+    """Zero-API-key daily close/volume adapter using Yahoo Finance v8 chart API."""
+    end_d = pd.Timestamp(end).date()
+    start_d = pd.Timestamp(start).date()
+    if end_d > date.today():
+        raise ValueError("End date cannot be in the future")
+    if start_d > end_d:
+        raise ValueError("Start date cannot be after end date")
+    cleaned = []
+    for raw in tickers:
+        sym = raw.strip().upper().replace("/", "-").replace(" ", "-")
+        if not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,11}", sym):
+            raise ValueError(f"Invalid stock symbol {raw!r}")
+        if sym not in cleaned:
+            cleaned.append(sym)
+    p1 = int(datetime(start_d.year, start_d.month, start_d.day, tzinfo=timezone.utc).timestamp())
+    p2_dt = datetime(end_d.year, end_d.month, end_d.day, tzinfo=timezone.utc) + timedelta(days=1)
+    p2 = int(p2_dt.timestamp())
+
+    def _fetch_one(sym: str) -> pd.DataFrame:
+        url = f"{YAHOO_CHART_ROOT}/{quote(sym)}?" + urlencode({
+            "period1": p1, "period2": p2, "interval": "1d",
+        })
+        payload = fetch(url, {"Accept": "application/json"})
+        return parse_yahoo_chart(payload, sym, start=start_d.isoformat(),
+                                 end=end_d.isoformat(), use_adjclose=use_adjclose)
+
+    frames: list[pd.DataFrame] = []
+    failed: dict[str, str] = {}
+    workers = max(1, min(max_workers, len(cleaned)))
+    if workers == 1:
+        for sym in cleaned:
+            try:
+                df = _fetch_one(sym)
+                if not df.empty:
+                    frames.append(df)
+                else:
+                    failed[sym] = "no valid daily bars in range"
+            except Exception as exc:
+                if not skip_errors:
+                    raise
+                failed[sym] = str(exc)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_fetch_one, sym): sym for sym in cleaned}
+            for fut in as_completed(futs):
+                sym = futs[fut]
+                try:
+                    df = fut.result()
+                    if not df.empty:
+                        frames.append(df)
+                    else:
+                        failed[sym] = "no valid daily bars in range"
+                except Exception as exc:
+                    if not skip_errors:
+                        raise
+                    failed[sym] = str(exc)
+
+    if not frames:
+        raise ValueError(f"Yahoo Finance returned no price observations (failed: {failed})")
+    combined = pd.concat(frames, ignore_index=True)
+    append_unique(out_dir / "prices.csv", combined, ["ticker", "date"])
+    return {
+        "provider": "yahoo",
+        "symbols_requested": len(cleaned),
+        "symbols_fetched": int(combined["ticker"].nunique()),
+        "failed_symbols": failed,
+        "rows_fetched": len(combined),
+        "start": start_d.isoformat(),
+        "end": end_d.isoformat(),
+        "price_basis": "adjclose (split+dividend adjusted)" if use_adjclose else "close (split-adjusted, dividend-unadjusted)",
+        "source": "Yahoo Finance v8 chart API (public unofficial endpoint; verify corporate-action and volume treatment)",
+        "url": YAHOO_CHART_ROOT,
+    }
+
+
+def fetch_prices(tickers: list[str], out_dir: Path, start: str, end: str,
+                 provider: str = "auto", use_adjclose: bool = False,
+                 skip_errors: bool = False) -> dict:
+    """Fetch daily prices via Twelve Data when configured, otherwise Yahoo Finance v8."""
+    choice = provider.lower()
+    if choice == "auto":
+        choice = "twelvedata" if os.environ.get("TWELVEDATA_API_KEY") else "yahoo"
+    if choice == "twelvedata":
+        return fetch_twelvedata_prices(tickers, out_dir, start, end)
+    if choice == "yahoo":
+        return fetch_yahoo_prices(tickers, out_dir, start, end,
+                                  use_adjclose=use_adjclose, skip_errors=skip_errors)
+    raise ValueError(f"Unknown price provider {provider!r}; expected auto, yahoo, or twelvedata")
 
 
 def inspect_stock_flow(ticker: str) -> dict:

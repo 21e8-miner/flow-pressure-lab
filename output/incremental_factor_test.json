@@ -1,0 +1,13 @@
+{
+  "days": 67,
+  "skipped": {},
+  "definition": "signal after close t; enter close t+1, exit close t+2; out-of-sample forward returns",
+  "status": "observational cross-sectional regression",
+  "valid_days": 67,
+  "mean_daily_bps_per_one_sd_flow_raw": 2.7645942478104657,
+  "mean_daily_bps_per_one_sd_flow_adjusted": 3.3701339849847076,
+  "tstat_hac5_adjusted": 1.6648119136904918,
+  "tstat_hac5_raw": 1.275588660506472,
+  "controls": "20-session momentum, log dollar ADV, sector fixed effects; not market cap",
+  "warning": "Not causally identified; no multiple-testing correction, execution cost or exposure limits."
+}

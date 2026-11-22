@@ -117,3 +117,266 @@ def signal_report(signal: pd.DataFrame, diagnostics: dict, path: Path, portfolio
     <footer>Signal numbers are research estimates, not third-party performance. Input files, vendor attribution, units, trade lag, and portfolio constraints are documented in README.md.</footer>"""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(base_html("Research Signal | Flow Pressure Lab", markup), encoding="utf-8")
+
+
+def _fmt_pct(val: float | None, digits: int = 1, signed: bool = False) -> str:
+    if val is None or pd.isna(val):
+        return "—"
+    prefix = "+" if signed and val > 0 else ""
+    return f"{prefix}{val:.{digits}f}%"
+
+
+def _fmt_num(val: float | None, digits: int = 2, signed: bool = False) -> str:
+    if val is None or pd.isna(val):
+        return "—"
+    prefix = "+" if signed and val > 0 else ""
+    return f"{prefix}{val:.{digits}f}"
+
+
+def _svg_excess_chart(backtest: pd.DataFrame) -> str:
+    """Render a lightweight self-contained SVG chart of cumulative net excess return (bps)."""
+    if backtest is None or backtest.empty or "cumulative_net_excess" not in backtest.columns:
+        return "<p class='muted'>No walk-forward backtest rows available to chart.</p>"
+    vals = (backtest["cumulative_net_excess"].astype(float) * 10000.0).tolist()
+    dates = backtest["return_close"].astype(str).tolist()
+    n = len(vals)
+    if n < 2:
+        return "<p class='muted'>Need at least 2 backtest sessions to plot a curve.</p>"
+    w, h, pad_l, pad_r, pad_t, pad_b = 900, 220, 56, 20, 18, 30
+    vmin, vmax = min(min(vals), 0.0), max(max(vals), 0.0)
+    span = max(vmax - vmin, 1e-6)
+    vmin -= span * 0.1
+    vmax += span * 0.1
+    span = vmax - vmin
+
+    def sx(i: int) -> float:
+        return pad_l + (w - pad_l - pad_r) * (i / (n - 1))
+
+    def sy(v: float) -> float:
+        return pad_t + (h - pad_t - pad_b) * (1.0 - (v - vmin) / span)
+
+    zero_y = sy(0.0)
+    pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(vals))
+    color = "#58d2ad" if vals[-1] >= 0 else "#ff9279"
+    return (
+        f"<svg viewBox='0 0 {w} {h}' style='width:100%;height:auto;display:block' role='img' "
+        f"aria-label='Cumulative net excess return in basis points'>"
+        f"<line x1='{pad_l}' y1='{zero_y:.1f}' x2='{w - pad_r}' y2='{zero_y:.1f}' "
+        f"stroke='#3a5166' stroke-dasharray='4 4' stroke-width='1'/>"
+        f"<polyline fill='none' stroke='{color}' stroke-width='2.4' points='{pts}'/>"
+        f"<text x='{pad_l - 8}' y='{pad_t + 6}' text-anchor='end' fill='#889cac' font-size='11'>{vmax:+.1f}bp</text>"
+        f"<text x='{pad_l - 8}' y='{zero_y + 4:.1f}' text-anchor='end' fill='#889cac' font-size='11'>0bp</text>"
+        f"<text x='{pad_l - 8}' y='{h - pad_b}' text-anchor='end' fill='#889cac' font-size='11'>{vmin:+.1f}bp</text>"
+        f"<text x='{pad_l}' y='{h - 8}' fill='#889cac' font-size='11'>{html.escape(dates[0])}</text>"
+        f"<text x='{w - pad_r}' y='{h - 8}' text-anchor='end' fill='#889cac' font-size='11'>{html.escape(dates[-1])}</text>"
+        f"</svg>"
+    )
+
+
+def empirical_report(
+    creation_eval: dict,
+    path: Path,
+    signal: pd.DataFrame | None = None,
+    signal_diag: dict | None = None,
+    portfolio: pd.DataFrame | None = None,
+    portfolio_info: dict | None = None,
+    backtest: pd.DataFrame | None = None,
+    backtest_summary: dict | None = None,
+    incremental: dict | None = None,
+    pilot_note: str | None = None,
+) -> None:
+    """Render an honest, self-contained HTML dashboard of live empirical test results."""
+    obs = creation_eval.get("observation_count", 0)
+    mae_imp = creation_eval.get("mae_improvement_vs_zero_pct")
+    rmse_imp = creation_eval.get("rmse_improvement_vs_zero_pct")
+    hit_rate = creation_eval.get("nonzero_direction_hit_rate_pct")
+    corr = creation_eval.get("pearson_correlation")
+    nz_rate = creation_eval.get("nonzero_outcome_rate_pct")
+    date_span = f"{creation_eval.get('date_start', '—')} to {creation_eval.get('date_end', '—')}"
+    funds = creation_eval.get("funds", [])
+
+    bt_net_bps = None
+    bt_ir = None
+    bt_trades = 0
+    bt_turnover = None
+    bt_gross_bps = None
+    if backtest_summary:
+        bt_trades = backtest_summary.get("trades", 0)
+        if backtest_summary.get("cumulative_net_excess") is not None:
+            bt_net_bps = backtest_summary["cumulative_net_excess"] * 10000.0
+        bt_ir = backtest_summary.get("annualized_information_ratio")
+    if backtest is not None and not backtest.empty:
+        bt_turnover = float(backtest["turnover_one_way"].mean() * 100.0)
+        cum_gross = float((1.0 + backtest["gross_return"]).prod() - 1.0)
+        cum_bench = float((1.0 + backtest["benchmark_return"]).prod() - 1.0)
+        bt_gross_bps = (cum_gross - cum_bench) * 10000.0
+
+    inc_t = incremental.get("tstat_hac5_adjusted") if incremental else None
+    inc_raw_t = incremental.get("tstat_hac5_raw") if incremental else None
+    inc_bps = incremental.get("mean_daily_bps_per_one_sd_flow_adjusted") if incremental else None
+    inc_raw_bps = incremental.get("mean_daily_bps_per_one_sd_flow_raw") if incremental else None
+    inc_days = incremental.get("valid_days", 0) if incremental else 0
+
+    kill_failed = mae_imp is not None and mae_imp <= 0
+    verdict_cls = "down" if kill_failed else "up"
+    verdict_label = "KILL CRITERION TRIGGERED — EWMA UNDERPERFORMS ZERO BASELINE" if kill_failed else "EWMA OUTPERFORMS ZERO BASELINE"
+
+    per_fund = creation_eval.get("per_fund") or {}
+    fund_rows_html = []
+    for f_name, stats in per_fund.items():
+        mi = stats.get("mae_improvement_vs_zero_pct")
+        ri = stats.get("rmse_improvement_vs_zero_pct")
+        c = stats.get("pearson_correlation")
+        fund_rows_html.append(
+            f"<tr><td><span class='symbol'>{html.escape(f_name)}</span>"
+            f"<span class='name'>{html.escape(str(stats.get('date_start', '')))} → {html.escape(str(stats.get('date_end', '')))}</span></td>"
+            f"<td>{stats.get('observation_count', 0):,}</td>"
+            f"<td>{_fmt_pct(stats.get('nonzero_outcome_rate_pct'), 1)}</td>"
+            f"<td>{fmt_millions(stats.get('mae_model_usd'))}</td>"
+            f"<td>{fmt_millions(stats.get('mae_zero_baseline_usd'))}</td>"
+            f"<td class='{('up' if (mi or 0) > 0 else 'down')}'>{_fmt_pct(mi, 1, signed=True)}</td>"
+            f"<td>{fmt_millions(stats.get('rmse_model_usd'))}</td>"
+            f"<td class='{('up' if (ri or 0) > 0 else 'down')}'>{_fmt_pct(ri, 1, signed=True)}</td>"
+            f"<td class='{('up' if (c or 0) > 0 else 'down')}'>{_fmt_num(c, 3, signed=True)}</td>"
+            f"<td>{_fmt_pct(stats.get('nonzero_direction_hit_rate_pct'), 1)}</td></tr>"
+        )
+    fund_rows_html.append(
+        f"<tr style='font-weight:700;background:#162638'><td>ALL ({len(funds)} funds)</td>"
+        f"<td>{obs:,}</td>"
+        f"<td>{_fmt_pct(nz_rate, 1)}</td>"
+        f"<td>{fmt_millions(creation_eval.get('mae_model_usd'))}</td>"
+        f"<td>{fmt_millions(creation_eval.get('mae_zero_baseline_usd'))}</td>"
+        f"<td class='{verdict_cls}'>{_fmt_pct(mae_imp, 1, signed=True)}</td>"
+        f"<td>{fmt_millions(creation_eval.get('rmse_model_usd'))}</td>"
+        f"<td class='{('up' if (rmse_imp or 0) > 0 else 'down')}'>{_fmt_pct(rmse_imp, 1, signed=True)}</td>"
+        f"<td class='{('up' if (corr or 0) > 0 else 'down')}'>{_fmt_num(corr, 3, signed=True)}</td>"
+        f"<td>{_fmt_pct(hit_rate, 1)}</td></tr>"
+    )
+
+    # Stock-level table payload for client-side sorting
+    stock_records = []
+    if signal is not None and not signal.empty:
+        merged = signal[signal["score"].notna()].copy()
+        if portfolio is not None and "tilt" in portfolio.columns:
+            merged = merged.merge(portfolio[["ticker", "tilt", "target_weight"]], on="ticker", how="left")
+        else:
+            merged["tilt"] = None
+            merged["target_weight"] = None
+        for r in merged.itertuples():
+            stock_records.append({
+                "ticker": str(r.ticker),
+                "sector": str(getattr(r, "sector", "") or ""),
+                "weight_pct": float(r.weight * 100.0),
+                "demand_usd": float(r.forecast_demand_usd),
+                "adv20_usd": float(r.adv20_usd),
+                "score_pct": float(r.score * 100.0),
+                "tilt_bps": None if pd.isna(r.tilt) else float(r.tilt * 10000.0),
+            })
+
+    te_text = "unavailable"
+    as_text = "—"
+    if portfolio_info:
+        te = portfolio_info.get("ex_ante_tracking_error")
+        te_text = f"{te*100:.2f}% annualized" if te is not None else str(portfolio_info.get("tracking_error_status", "unavailable"))
+        as_text = f"{portfolio_info.get('active_share', 0)*100:.2f}%"
+
+    pilot_disclosure = pilot_note or (
+        "Free public issuer endpoints publish only the latest holdings snapshot, not historical daily constituent archives. "
+        "Therefore the multi-session backtest and incremental-signal tests hold the latest constituent weights constant "
+        "while using strictly point-in-time historical ProShares share creations and Yahoo Finance daily closes/volumes."
+    )
+
+    asof_label = signal_diag.get("asof", "—") if signal_diag else "—"
+    stock_count = len(stock_records)
+
+    content = f"""
+    <div class='eyebrow'>FLOW PRESSURE LAB / LIVE EMPIRICAL EVALUATION</div>
+    <h1>Empirical falsification report.</h1>
+    <p class='lead'>Live-fetched ProShares official NAV/share-count histories, iShares IVV sector classifications, and Yahoo Finance daily price/volume bars tested end-to-end. Results are reported without tuning or cherry-picking.</p>
+    <div class='badges'>
+      <span class='pill'>PROSHARES HISTORY: {html.escape(date_span)}</span>
+      <span class='pill'>PIT SIGNAL AS OF: {html.escape(str(asof_label))}</span>
+      <span class='pill'>PRICES: YAHOO FINANCE V8</span>
+      <span class='pill {verdict_cls}'>{html.escape(verdict_label)}</span>
+    </div>
+    <div class='grid'>
+      <div class='metric'><small>Real ProShares fund-days tested</small><div class='val'>{obs:,}</div><small>{len(funds)} funds ({html.escape(', '.join(funds))})</small></div>
+      <div class='metric'><small>EWMA vs zero-flow MAE</small><div class='val {verdict_cls}'>{_fmt_pct(mae_imp, 1, signed=True)}</div><small>RMSE: {_fmt_pct(rmse_imp, 1, signed=True)} · r = {_fmt_num(corr, 3, signed=True)}</small></div>
+      <div class='metric'><small>Walk-forward net excess (5 bps)</small><div class='val {("up" if (bt_net_bps or 0) > 0 else "down")}'>{_fmt_num(bt_net_bps, 1, signed=True)} bps</div><small>{bt_trades} sessions · IR {_fmt_num(bt_ir, 2, signed=True)}</small></div>
+      <div class='metric'><small>Fama–MacBeth HAC-5 t-stat</small><div class='val'>{_fmt_num(inc_t, 2, signed=True)}</div><small>{_fmt_num(inc_bps, 2, signed=True)} bps/day per 1 SD ({inc_days}d)</small></div>
+    </div>
+
+    <section>
+      <div class='sec-head'>
+        <div><h2>1. ETF Share-Creation Forecast vs. Zero-Flow Baseline (Strictly PIT)</h2>
+        <span class='muted'>Trailing 5-session EWMA of share-creation rates evaluated strictly out-of-sample against predicting zero net creations</span></div>
+      </div>
+      <div class='table-scroller'>
+        <table>
+          <thead><tr><th>Fund</th><th>Obs</th><th>Nonzero Days</th><th>Model MAE</th><th>Zero MAE</th><th>MAE vs Zero</th><th>Model RMSE</th><th>RMSE vs Zero</th><th>Pearson r</th><th>Nonzero Hit</th></tr></thead>
+          <tbody>{"".join(fund_rows_html)}</tbody>
+        </table>
+      </div>
+      <div class='sec-body'>
+        <div class='note'><strong>Empirical finding:</strong> The naive 5-day EWMA fails the zero-baseline kill criterion on every tested fund. Two structural reasons explain why: (1) roughly half of all trading days have <em>zero</em> net share creations ({_fmt_pct(nz_rate, 1)} nonzero overall), and (2) equity ETFs like NOBL and REGL experience quarter-end <strong>ETF heartbeat trades</strong> (large in-kind creations immediately followed by matching redemptions for tax-basis management), causing EWMA to extrapolate spikes into next-day reversals (negative Pearson correlation on NOBL and REGL).</div>
+      </div>
+    </section>
+
+    <section>
+      <div class='sec-head'>
+        <div><h2>2. Walk-Forward Backtest &amp; Incremental Signal Diagnostics</h2>
+        <span class='muted'>Signal after close t → execute close t+1 → realize close t+1 to t+2 · Assumed 5 bps one-way cost</span></div>
+      </div>
+      <div class='sec-body'>
+        {_svg_excess_chart(backtest)}
+        <div class='explain' style='margin-top:20px'>
+          <div><div class='eyebrow'>Backtest (Gross vs Net)</div><h2>{_fmt_num(bt_gross_bps, 1, signed=True)} / {_fmt_num(bt_net_bps, 1, signed=True)} bps</h2><p class='muted'>Cumulative gross vs. net excess over {bt_trades} sessions. Mean daily one-way turnover: {_fmt_pct(bt_turnover, 2)}. At 5 bps cost, turnover erases gross excess (IR {_fmt_num(bt_ir, 2, signed=True)}).</p></div>
+          <div><div class='eyebrow'>Fama–MacBeth (Controlled)</div><h2>{_fmt_num(inc_bps, 2, signed=True)} bps/d (t={_fmt_num(inc_t, 2, signed=True)})</h2><p class='muted'>Controlled for 20-day momentum, log ADV20, and sector fixed effects over {inc_days} cross sections. Raw slope: {_fmt_num(inc_raw_bps, 2, signed=True)} bps/d (t={_fmt_num(inc_raw_t, 2, signed=True)}). Not significant at 5%.</p></div>
+          <div><div class='eyebrow'>PIT Portfolio Snapshot</div><h2>TE {html.escape(te_text)}</h2><p class='muted'>Constrained long-only, sector-neutral tilts (±35 bps cap) on {stock_count} constituents. Active share: {html.escape(as_text)}. Sector neutral: {html.escape(str(portfolio_info.get('sector_neutral', '—') if portfolio_info else '—'))}.</p></div>
+        </div>
+        <div class='note'><strong>Point-in-time caveat:</strong> {html.escape(pilot_disclosure)}</div>
+      </div>
+    </section>
+
+    <section>
+      <div class='sec-head'>
+        <div><h2>3. Live Point-in-Time Stock Pressure ({stock_count} Constituents, as of {html.escape(str(asof_label))})</h2>
+        <span class='muted'>Forecast creation-equivalent dollars divided by trailing 20-session dollar ADV</span></div>
+        <div class='controls'>
+          <button id='sort_score' class='active'>Pressure (% ADV20)</button>
+          <button id='sort_demand'>Forecast Demand ($)</button>
+          <button id='sort_tilt'>Active Tilt (bps)</button>
+        </div>
+      </div>
+      <div class='table-scroller'>
+        <table>
+          <thead><tr><th>Security</th><th>Benchmark Wt</th><th>Forecast Demand</th><th>ADV20</th><th>Pressure (% ADV20)</th><th>Target Tilt</th></tr></thead>
+          <tbody id='stock-body'></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer><p>Sources: ProShares official CSVs (historical NAV &amp; daily holdings), iShares IVV holdings CSV (sector mapping), Yahoo Finance v8 chart API (daily split-adjusted closes &amp; volume). Research prototype only — not investment advice or verified alpha.</p></footer>
+    """
+
+    js = "const stocks=" + json.dumps(stock_records, ensure_ascii=True).replace("<", "\\u003c") + ";" + r"""
+    let mode='score';const tbody=document.getElementById('stock-body');
+    const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const fmtM=n=>n===null||n===undefined?'—':(n<0?'−':n>0?'+':'')+'$'+(Math.abs(n)/1e6).toFixed(2)+'M';
+    const fmtADV=n=>'$'+(n/1e6).toFixed(1)+'M';
+    const key=r=>mode==='demand'?r.demand_usd:mode==='tilt'?(r.tilt_bps??-999):r.score_pct;
+    function draw(){
+      const sorted=stocks.slice().sort((a,b)=>key(b)-key(a));
+      tbody.innerHTML=sorted.map(r=>{
+        const scCls=r.score_pct>=0?'up':'down';
+        const tCls=(r.tilt_bps??0)>=0?'up':'down';
+        const tiltTxt=r.tilt_bps===null?'—':(r.tilt_bps>0?'+':'')+r.tilt_bps.toFixed(1)+' bps';
+        return `<tr><td><span class="symbol">${esc(r.ticker)}</span><span class="name">${esc(r.sector)}</span></td><td>${r.weight_pct.toFixed(2)}%</td><td class="${scCls}">${fmtM(r.demand_usd)}</td><td>${fmtADV(r.adv20_usd)}</td><td class="${scCls}">${r.score_pct>=0?'+':''}${r.score_pct.toFixed(4)}%</td><td class="${tCls}">${tiltTxt}</td></tr>`;
+      }).join('');
+      ['score','demand','tilt'].forEach(m=>document.getElementById('sort_'+m).classList.toggle('active',m===mode));
+    }
+    ['score','demand','tilt'].forEach(m=>document.getElementById('sort_'+m).addEventListener('click',()=>{mode=m;draw();}));
+    draw();
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(base_html("Empirical Evaluation | Flow Pressure Lab", content, js), encoding="utf-8")
